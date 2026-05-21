@@ -11,9 +11,12 @@ from codexer.core import (
     InvalidProfileName,
     ProfileExists,
     ProfileNotFound,
+    add_hook,
     add_profile,
     build_codex_env,
+    list_hooks,
     list_profiles,
+    remove_hook,
     remove_profile,
     run_codex,
     validate_profile_name,
@@ -156,10 +159,76 @@ def test_run_codex_resolves_executable_from_path(tmp_path: Path) -> None:
         executable.write_text(f"#!/usr/bin/env sh\nprintf '%s\\n' \"$*\" > '{output}'\n", encoding="utf-8")
         executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
 
-    code = run_codex(["--help"], executable="codex", base_env={"PATH": str(bin_dir)})
+    code = run_codex(
+        ["--help"],
+        executable="codex",
+        base_env={"PATH": str(bin_dir)},
+        run_configured_hooks=False,
+    )
 
     assert code == 0
     assert "--help" in output.read_text(encoding="utf-8")
+
+
+def test_add_list_and_remove_hooks(tmp_path: Path) -> None:
+    root = tmp_path / "profiles"
+
+    hook = add_hook("prepare", "echo ready", root=root)
+    scoped = add_hook("profile-only", "echo scoped", profile="work", root=root)
+
+    assert hook.name == "prepare"
+    assert hook.profile == "*"
+    assert scoped.profile == "work"
+    assert [(item.profile, item.name) for item in list_hooks(root=root)] == [
+        ("*", "prepare"),
+        ("work", "profile-only"),
+    ]
+    assert [item.name for item in list_hooks(profile="work", root=root)] == ["profile-only"]
+    assert remove_hook("prepare", root=root).removed is True
+    assert remove_hook("prepare", root=root).removed is False
+
+
+def test_run_codex_runs_hooks_with_profile_env(tmp_path: Path) -> None:
+    root = tmp_path / "profiles"
+    profile = root / "work"
+    profile.mkdir(parents=True)
+    hook_output = tmp_path / "hook.txt"
+    codex_output = tmp_path / "codex.txt"
+
+    if sys.platform == "win32":
+        hook_script = tmp_path / "hook.cmd"
+        hook_script.write_text(
+            f"@echo off\r\necho HOOK=%CODEX_HOME% > \"{hook_output}\"\r\n",
+            encoding="utf-8",
+        )
+        codex_script = tmp_path / "codex.cmd"
+        codex_script.write_text(
+            f"@echo off\r\necho CODEX=%CODEX_HOME% %* > \"{codex_output}\"\r\n",
+            encoding="utf-8",
+        )
+        hook_command = f'"{hook_script}"'
+    else:
+        hook_script = tmp_path / "hook.sh"
+        hook_script.write_text(
+            f"#!/usr/bin/env sh\nprintf 'HOOK=%s\\n' \"$CODEX_HOME\" > '{hook_output}'\n",
+            encoding="utf-8",
+        )
+        hook_script.chmod(hook_script.stat().st_mode | stat.S_IXUSR)
+        codex_script = tmp_path / "codex"
+        codex_script.write_text(
+            f"#!/usr/bin/env sh\nprintf 'CODEX=%s %s\\n' \"$CODEX_HOME\" \"$*\" > '{codex_output}'\n",
+            encoding="utf-8",
+        )
+        codex_script.chmod(codex_script.stat().st_mode | stat.S_IXUSR)
+        hook_command = str(hook_script)
+
+    add_hook("prepare", hook_command, root=root)
+
+    code = run_codex(["--alpha"], profile="work", root=root, executable=str(codex_script), base_env={})
+
+    assert code == 0
+    assert f"HOOK={profile}" in hook_output.read_text(encoding="utf-8")
+    assert f"CODEX={profile}" in codex_output.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b"])

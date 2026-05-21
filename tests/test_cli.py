@@ -35,6 +35,41 @@ def test_cli_add_list_and_rm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ca
     assert "Removed profile 'demo'" in rm_out
 
 
+def test_cli_command_aliases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    source = tmp_path / "source"
+    root = tmp_path / "profiles"
+    make_source_home(source)
+    monkeypatch.setenv("CODEX_HOME", str(source))
+    monkeypatch.setenv("CODEXER_ROOT", str(root))
+
+    assert cli.main(["new", "demo"]) == 0
+    assert cli.main(["ls"]) == 0
+    assert "demo" in capsys.readouterr().out
+    assert cli.main(["delete", "demo"]) == 0
+    assert "Removed profile 'demo'" in capsys.readouterr().out
+
+
+def test_cli_init_creates_profile_and_runs_codex(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "source"
+    root = tmp_path / "profiles"
+    make_source_home(source)
+    calls: list[tuple[list[str], str | None]] = []
+
+    monkeypatch.setenv("CODEX_HOME", str(source))
+    monkeypatch.setenv("CODEXER_ROOT", str(root))
+    monkeypatch.setattr(cli, "run_codex", lambda args, profile=None: calls.append((list(args), profile)) or 0)
+
+    assert cli.main(["init", "demo", "--model", "gpt-5.4"]) == 0
+
+    assert (root / "demo").is_dir()
+    assert calls == [(["--model", "gpt-5.4"], "demo")]
+    assert "Created profile 'demo'" in capsys.readouterr().out
+
+
 def test_cli_rm_missing_warns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("CODEXER_ROOT", str(tmp_path / "profiles"))
 
@@ -72,3 +107,51 @@ def test_cli_unknown_profile_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert cli.main(["missing"]) == 2
 
     assert "Profile 'missing' does not exist" in capsys.readouterr().err
+
+
+def test_cli_hook_management_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CODEXER_ROOT", str(tmp_path / "profiles"))
+
+    assert cli.main(["hook", "register", "prepare", "echo", "ready"]) == 0
+    assert "Added hook 'prepare'" in capsys.readouterr().out
+
+    assert cli.main(["hook", "ls"]) == 0
+    list_out = capsys.readouterr().out
+    assert "prepare" in list_out
+    assert "echo ready" in list_out
+
+    assert cli.main(["hook", "del", "prepare"]) == 0
+    assert "Removed hook 'prepare'" in capsys.readouterr().out
+
+
+def test_cli_hook_add_accepts_profile_after_quoted_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CODEXER_ROOT", str(tmp_path / "profiles"))
+
+    assert cli.main(["hook", "add", "test", "echo hello", "--profile", "mytime"]) == 0
+    assert "profile 'mytime': echo hello" in capsys.readouterr().out
+
+    assert cli.main(["hook", "ls", "--profile", "mytime"]) == 0
+    list_out = capsys.readouterr().out
+    assert "mytime\ttest\techo hello" in list_out
+
+
+def test_cli_hook_add_accepts_profile_equals_after_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CODEXER_ROOT", str(tmp_path / "profiles"))
+
+    assert cli.main(["hook", "add", "test", "echo hello", "--profile=mytime"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["hook", "ls", "--profile", "mytime"]) == 0
+    assert "mytime\ttest\techo hello" in capsys.readouterr().out
