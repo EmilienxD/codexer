@@ -198,8 +198,14 @@ def run_hooks(
         result = HookRunResult(hook, completed.returncode)
         results.append(result)
         if completed.returncode != 0:
+            hint = ""
+            if os.name != "nt" and _looks_windowsy_hook_command(hook.command):
+                hint = (
+                    " Hint: this looks like a Windows hook command. On this platform hooks run under "
+                    "/bin/sh; use shell syntax like 'export VAR=value' or a '.sh' script."
+                )
             raise HookFailed(
-                f"Hook '{hook.name}' failed with exit code {completed.returncode}."
+                f"Hook '{hook.name}' failed with exit code {completed.returncode}.{hint}"
             )
     return results
 
@@ -244,7 +250,9 @@ def add_profile(
             if _should_skip(rel_file, include_auth=include_auth, include_config=include_config):
                 skipped.append(rel_file)
                 continue
-            os.symlink(source / rel_file, target / rel_file)
+            source_file = source / rel_file
+            link_path = target / rel_file
+            os.symlink(_symlink_target(source_file, link_path), link_path)
             linked += 1
 
     return AddResult(
@@ -396,10 +404,34 @@ def _open_path(path: Path) -> None:
         os.startfile(str(path))  # type: ignore[attr-defined]
         return
     opener = "open" if sys_platform() == "darwin" else "xdg-open"
-    subprocess.Popen([opener, str(path)])
+    try:
+        subprocess.Popen([opener, str(path)])
+    except FileNotFoundError as exc:
+        raise CodexerError(
+            f"Unable to open '{path}': opener '{opener}' was not found on PATH."
+        ) from exc
 
 
 def sys_platform() -> str:
     import sys
 
     return sys.platform
+
+
+def _symlink_target(source_file: Path, link_path: Path) -> str:
+    if os.name == "nt":
+        return str(source_file)
+    # Prefer relative symlinks on POSIX so profiles remain movable with their source home.
+    return os.path.relpath(str(source_file), start=str(link_path.parent))
+
+
+def _looks_windowsy_hook_command(command: str) -> bool:
+    trimmed = command.strip()
+    lowered = trimmed.casefold()
+    if lowered.startswith("set ") and "=" in lowered:
+        return True
+    if ".cmd" in lowered or ".bat" in lowered:
+        return True
+    if "%codex_home%" in lowered or "%from_hook%" in lowered:
+        return True
+    return False

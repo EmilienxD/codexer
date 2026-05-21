@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from codexer.core import (
+    CodexerError,
     InvalidProfileName,
     ProfileExists,
     ProfileNotFound,
@@ -67,6 +68,20 @@ def test_add_profile_can_include_auth_and_config(tmp_path: Path) -> None:
     assert result.skipped_files == ()
     assert (root / "full" / "auth.json").is_symlink()
     assert (root / "full" / "config.toml").is_symlink()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Relative symlink behavior is POSIX-specific.")
+def test_add_profile_creates_relative_symlinks_on_posix(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    root = tmp_path / "profiles"
+    make_source_home(source)
+
+    add_profile("work", root=root, source_home=source)
+    link = root / "work" / "nested" / "tool.json"
+
+    target = link.readlink()
+    assert not target.is_absolute()
+    assert os.path.samefile(link, source / "nested" / "tool.json")
 
 
 def test_add_profile_rejects_existing_profile(tmp_path: Path) -> None:
@@ -259,6 +274,25 @@ def test_run_codex_allows_hook_env_changes_to_reach_codex(tmp_path: Path) -> Non
 
     assert code == 0
     assert codex_output.read_text(encoding="utf-8").strip() == "FROM_HOOK=ready"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX opener behavior is non-Windows.")
+def test_open_profile_errors_when_opener_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    from codexer.core import open_profile
+
+    root = tmp_path / "profiles"
+    (root / "work").mkdir(parents=True)
+    monkeypatch.setenv("CODEXER_ROOT", str(root))
+
+    def fake_popen(args, **kwargs):
+        raise FileNotFoundError(str(args[0]))
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(CodexerError, match="opener"):
+        open_profile("work", root=root)
 
 
 @pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b"])
