@@ -104,7 +104,7 @@ def _create_profile(parsed: argparse.Namespace):
 
 def _print_add_result(result, *, opened: bool) -> None:
     print(f"Created profile '{result.profile.name}' at {_display(result.profile.path)}")
-    print(f"Linked {result.linked_files} file(s) from {_display(result.source_home)}")
+    print(f"Linked {result.linked_files} root item(s) from {_display(result.source_home)}")
     if result.skipped_files:
         skipped = ", ".join(str(path).replace("\\", "/") for path in result.skipped_files)
         print(f"Skipped: {skipped}")

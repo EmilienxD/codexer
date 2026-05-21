@@ -24,7 +24,9 @@ def test_cli_add_list_and_rm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ca
     assert cli.main(["add", "demo"]) == 0
     add_out = capsys.readouterr().out
     assert "Created profile 'demo'" in add_out
-    assert "Skipped: auth.json, config.toml" in add_out
+    assert "Skipped: auth.json" in add_out
+    assert "config.toml" not in add_out
+    assert (root / "demo" / "config.toml").is_symlink()
 
     assert cli.main(["list"]) == 0
     list_out = capsys.readouterr().out

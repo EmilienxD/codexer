@@ -41,13 +41,15 @@ def test_add_profile_symlinks_files_skips_auth_and_includes_config(tmp_path: Pat
     result = add_profile("work", root=root, source_home=source)
     profile = root / "work"
 
-    assert result.linked_files == 2
-    assert result.skipped_files == (Path("auth.json"), Path("config.toml"))
+    assert result.linked_files == 3
+    assert result.skipped_files == (Path("auth.json"),)
     assert profile.is_dir()
     assert not (profile / "auth.json").exists()
-    assert not (profile / "config.toml").exists()
+    assert (profile / "config.toml").is_symlink()
     assert (profile / "instructions.md").is_symlink()
-    assert (profile / "nested" / "tool.json").is_symlink()
+    assert (profile / "nested").is_symlink()
+    (source / "nested" / "created-later.json").write_text("later", encoding="utf-8")
+    assert (profile / "nested" / "created-later.json").read_text(encoding="utf-8") == "later"
     assert os.path.samefile(profile / "instructions.md", source / "instructions.md")
 
 
@@ -61,13 +63,25 @@ def test_add_profile_can_include_auth(tmp_path: Path) -> None:
         root=root,
         source_home=source,
         include_auth=True,
-        include_config=True,
     )
 
     assert result.linked_files == 4
     assert result.skipped_files == ()
     assert (root / "full" / "auth.json").is_symlink()
     assert (root / "full" / "config.toml").is_symlink()
+
+
+def test_add_profile_can_exclude_config(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    root = tmp_path / "profiles"
+    make_source_home(source)
+
+    result = add_profile("minimal", root=root, source_home=source, exclude_config=True)
+
+    assert result.linked_files == 2
+    assert result.skipped_files == (Path("auth.json"), Path("config.toml"))
+    assert not (root / "minimal" / "auth.json").exists()
+    assert not (root / "minimal" / "config.toml").exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Relative symlink behavior is POSIX-specific.")
@@ -77,11 +91,11 @@ def test_add_profile_creates_relative_symlinks_on_posix(tmp_path: Path) -> None:
     make_source_home(source)
 
     add_profile("work", root=root, source_home=source)
-    link = root / "work" / "nested" / "tool.json"
+    link = root / "work" / "nested"
 
     target = link.readlink()
     assert not target.is_absolute()
-    assert os.path.samefile(link, source / "nested" / "tool.json")
+    assert os.path.samefile(link, source / "nested")
 
 
 def test_add_profile_rejects_existing_profile(tmp_path: Path) -> None:

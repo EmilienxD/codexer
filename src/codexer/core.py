@@ -239,21 +239,18 @@ def add_profile(
 
     skipped: list[Path] = []
     linked = 0
-    for dirpath, _, filenames in os.walk(source):
-        source_dir = Path(dirpath)
-        rel_dir = source_dir.relative_to(source)
-        target_dir = target / rel_dir
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        for filename in filenames:
-            rel_file = rel_dir / filename
-            if _should_skip(rel_file, include_auth=include_auth, include_config=include_config):
-                skipped.append(rel_file)
-                continue
-            source_file = source / rel_file
-            link_path = target / rel_file
-            os.symlink(_symlink_target(source_file, link_path), link_path)
-            linked += 1
+    for source_path in source.iterdir():
+        rel_path = source_path.relative_to(source)
+        if _should_skip(rel_path, include_auth=include_auth, exclude_config=exclude_config):
+            skipped.append(rel_path)
+            continue
+        link_path = target / rel_path
+        os.symlink(
+            _symlink_target(source_path, link_path),
+            link_path,
+            target_is_directory=source_path.is_dir(),
+        )
+        linked += 1
 
     return AddResult(
         profile=Profile(validate_profile_name(name), target),
@@ -418,11 +415,11 @@ def sys_platform() -> str:
     return sys.platform
 
 
-def _symlink_target(source_file: Path, link_path: Path) -> str:
+def _symlink_target(source_path: Path, link_path: Path) -> str:
     if os.name == "nt":
-        return str(source_file)
+        return str(source_path)
     # Prefer relative symlinks on POSIX so profiles remain movable with their source home.
-    return os.path.relpath(str(source_file), start=str(link_path.parent))
+    return os.path.relpath(str(source_path), start=str(link_path.parent))
 
 
 def _looks_windowsy_hook_command(command: str) -> bool:
