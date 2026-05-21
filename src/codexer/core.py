@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import shutil
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -301,8 +302,14 @@ def run_codex(
     else:
         env.setdefault("CODEX_HOME", str(codex_home()))
     if run_configured_hooks:
-        run_hooks(profile=profile, env=env, root=root)
+        hooks = _hooks_for_run(profile=profile, root=root)
+    else:
+        hooks = []
     executable_path = shutil.which(executable, path=env.get("PATH")) or executable
+    if hooks:
+        command = _shell_chain([hook.command for hook in hooks], [executable_path, *args])
+        completed = subprocess.run(command, shell=True, env=env, check=False)
+        return completed.returncode
     try:
         completed = subprocess.run([executable_path, *args], env=env, check=False)
     except (FileNotFoundError, PermissionError) as exc:
@@ -349,6 +356,39 @@ def _save_hook_data(data: Mapping[str, object], *, root: str | os.PathLike[str] 
 
 def _hook_from_item(profile: str, item: Mapping[str, object]) -> Hook:
     return Hook(str(item.get("name", "")), str(item.get("command", "")), profile)
+
+
+def _hooks_for_run(
+    *,
+    profile: str | None,
+    root: str | os.PathLike[str] | None = None,
+) -> list[Hook]:
+    hooks = list_hooks(profile=GLOBAL_HOOK_PROFILE, root=root)
+    if profile is not None:
+        hooks.extend(list_hooks(profile=profile, root=root))
+    return hooks
+
+
+def _shell_chain(hook_commands: Sequence[str], codex_command: Sequence[str]) -> str:
+    commands = [*hook_commands, _quote_shell_command(codex_command)]
+    joiner = "&&" if os.name == "nt" else " && "
+    return joiner.join(commands)
+
+
+def _quote_shell_command(command: Sequence[str]) -> str:
+    if os.name == "nt":
+        return " ".join(_quote_cmd_arg(part) for part in command)
+    return shlex.join(command)
+
+
+def _quote_cmd_arg(value: str) -> str:
+    if value == "":
+        return '""'
+    quoted = subprocess.list2cmdline([value])
+    shell_special = set("&|<>()^")
+    if any(char in shell_special for char in value) and not quoted.startswith('"'):
+        quoted = f'"{quoted}"'
+    return quoted
 
 
 def _open_path(path: Path) -> None:

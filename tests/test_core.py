@@ -231,6 +231,36 @@ def test_run_codex_runs_hooks_with_profile_env(tmp_path: Path) -> None:
     assert f"CODEX={profile}" in codex_output.read_text(encoding="utf-8")
 
 
+def test_run_codex_allows_hook_env_changes_to_reach_codex(tmp_path: Path) -> None:
+    root = tmp_path / "profiles"
+    profile = root / "work"
+    profile.mkdir(parents=True)
+    codex_output = tmp_path / "codex.txt"
+
+    if sys.platform == "win32":
+        codex_script = tmp_path / "codex.cmd"
+        codex_script.write_text(
+            f"@echo off\r\necho FROM_HOOK=%FROM_HOOK% > \"{codex_output}\"\r\n",
+            encoding="utf-8",
+        )
+        hook_command = "set FROM_HOOK=ready"
+    else:
+        codex_script = tmp_path / "codex"
+        codex_script.write_text(
+            f"#!/usr/bin/env sh\nprintf 'FROM_HOOK=%s\\n' \"$FROM_HOOK\" > '{codex_output}'\n",
+            encoding="utf-8",
+        )
+        codex_script.chmod(codex_script.stat().st_mode | stat.S_IXUSR)
+        hook_command = "export FROM_HOOK=ready"
+
+    add_hook("env", hook_command, root=root)
+
+    code = run_codex([], profile="work", root=root, executable=str(codex_script), base_env={})
+
+    assert code == 0
+    assert codex_output.read_text(encoding="utf-8").strip() == "FROM_HOOK=ready"
+
+
 @pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b"])
 def test_validate_profile_name_rejects_path_names(name: str) -> None:
     with pytest.raises(InvalidProfileName):
