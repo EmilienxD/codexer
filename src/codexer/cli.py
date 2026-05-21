@@ -91,7 +91,7 @@ def _create_profile(parsed: argparse.Namespace):
         result = add_profile(
             parsed.name,
             include_auth=parsed.include_auth,
-            include_config=parsed.include_config,
+            exclude_config=parsed.exclude_config,
         )
     except ProfileExists:
         raise
@@ -201,7 +201,7 @@ def _add_parser(prog: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("name")
     parser.add_argument("--include-auth", action="store_true")
-    parser.add_argument("--include-config", action="store_true")
+    parser.add_argument("--exclude-config", action="store_true")
     parser.add_argument("--open", action="store_true")
     return parser
 

@@ -35,6 +35,23 @@ def test_cli_add_list_and_rm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ca
     assert "Removed profile 'demo'" in rm_out
 
 
+def test_cli_add_can_exclude_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "source"
+    root = tmp_path / "profiles"
+    make_source_home(source)
+    monkeypatch.setenv("CODEX_HOME", str(source))
+    monkeypatch.setenv("CODEXER_ROOT", str(root))
+
+    assert cli.main(["add", "demo", "--exclude-config"]) == 0
+    add_out = capsys.readouterr().out
+    assert "Skipped: auth.json, config.toml" in add_out
+    assert not (root / "demo" / "config.toml").exists()
+
+
 def test_cli_command_aliases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = tmp_path / "source"
     root = tmp_path / "profiles"

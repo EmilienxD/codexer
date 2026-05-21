@@ -33,7 +33,7 @@ def make_source_home(path: Path) -> None:
     (path / "nested" / "tool.json").write_text("tool", encoding="utf-8")
 
 
-def test_add_profile_symlinks_files_and_skips_auth_and_config(tmp_path: Path) -> None:
+def test_add_profile_symlinks_files_skips_auth_and_includes_config(tmp_path: Path) -> None:
     source = tmp_path / "source"
     root = tmp_path / "profiles"
     make_source_home(source)
@@ -51,7 +51,7 @@ def test_add_profile_symlinks_files_and_skips_auth_and_config(tmp_path: Path) ->
     assert os.path.samefile(profile / "instructions.md", source / "instructions.md")
 
 
-def test_add_profile_can_include_auth_and_config(tmp_path: Path) -> None:
+def test_add_profile_can_include_auth(tmp_path: Path) -> None:
     source = tmp_path / "source"
     root = tmp_path / "profiles"
     make_source_home(source)

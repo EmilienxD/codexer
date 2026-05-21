@@ -83,7 +83,7 @@ class HookRunResult:
     returncode: int
 
 
-ROOT_EXCLUDED_FILES = frozenset({Path("auth.json"), Path("config.toml")})
+ROOT_EXCLUDED_FILES = frozenset({Path("auth.json")})
 GLOBAL_HOOK_PROFILE = "*"
 
 
@@ -222,7 +222,7 @@ def add_profile(
     name: str,
     *,
     include_auth: bool = False,
-    include_config: bool = False,
+    exclude_config: bool = False,
     root: str | os.PathLike[str] | None = None,
     source_home: str | os.PathLike[str] | None = None,
 ) -> AddResult:
@@ -325,10 +325,10 @@ def run_codex(
     return completed.returncode
 
 
-def _should_skip(rel_file: Path, *, include_auth: bool, include_config: bool) -> bool:
+def _should_skip(rel_file: Path, *, include_auth: bool, exclude_config: bool) -> bool:
     if rel_file == Path("auth.json") and not include_auth:
         return True
-    if rel_file == Path("config.toml") and not include_config:
+    if rel_file == Path("config.toml") and exclude_config:
         return True
     return False
 
