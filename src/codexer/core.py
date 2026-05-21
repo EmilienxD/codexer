@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, Sequence
+
+
+class CodexerError(Exception):
+    """Base exception for SDK callers."""
+
+
+class InvalidProfileName(CodexerError, ValueError):
+    pass
+
+
+class ProfileExists(CodexerError, FileExistsError):
+    pass
+
+
+class ProfileNotFound(CodexerError, FileNotFoundError):
+    pass
+
+
+class SourceHomeMissing(CodexerError, FileNotFoundError):
+    pass
+
+
+class CodexExecutableNotFound(CodexerError, FileNotFoundError):
+    pass
+
+
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class AddResult:
+    profile: Profile
+    source_home: Path
+    linked_files: int
+    skipped_files: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class RemoveResult:
+    name: str
+    path: Path
+    removed: bool
+
+
+ROOT_EXCLUDED_FILES = frozenset({Path("auth.json"), Path("config.toml")})
+
+
+def codexer_root(root: str | os.PathLike[str] | None = None) -> Path:
+    if root is not None:
+        return Path(root).expanduser()
+    return Path(os.environ.get("CODEXER_ROOT", Path.home() / "codexer")).expanduser()
+
+
+def codex_home(home: str | os.PathLike[str] | None = None) -> Path:
+    if home is not None:
+        return Path(home).expanduser()
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+
+def validate_profile_name(name: str) -> str:
+    if not name or name in {".", ".."}:
+        raise InvalidProfileName("Profile name must not be empty, '.' or '..'.")
+    if "/" in name or "\\" in name:
+        raise InvalidProfileName("Profile name must not contain path separators.")
+    if Path(name).name != name:
+        raise InvalidProfileName("Profile name must be a single folder name.")
+    return name
+
+
+def profile_path(name: str, *, root: str | os.PathLike[str] | None = None) -> Path:
+    return codexer_root(root) / validate_profile_name(name)
+
+
+def list_profiles(*, root: str | os.PathLike[str] | None = None) -> list[Profile]:
+    base = codexer_root(root)
+    if not base.exists():
+        return []
+    return sorted(
+        (Profile(path.name, path) for path in base.iterdir() if path.is_dir()),
+        key=lambda profile: profile.name.casefold(),
+    )
+
+
+def add_profile(
+    name: str,
+    *,
+    include_auth: bool = False,
+    include_config: bool = False,
+    root: str | os.PathLike[str] | None = None,
+    source_home: str | os.PathLike[str] | None = None,
+) -> AddResult:
+    source = codex_home(source_home).resolve()
+    if not source.is_dir():
+        raise SourceHomeMissing(f"Codex home does not exist: {source}")
+
+    target = profile_path(name, root=root)
+    if target.exists():
+        raise ProfileExists(f"Profile already exists: {target}")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.mkdir()
+
+    skipped: list[Path] = []
+    linked = 0
+    for dirpath, _, filenames in os.walk(source):
+        source_dir = Path(dirpath)
+        rel_dir = source_dir.relative_to(source)
+        target_dir = target / rel_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename in filenames:
+            rel_file = rel_dir / filename
+            if _should_skip(rel_file, include_auth=include_auth, include_config=include_config):
+                skipped.append(rel_file)
+                continue
+            os.symlink(source / rel_file, target / rel_file)
+            linked += 1
+
+    return AddResult(
+        profile=Profile(validate_profile_name(name), target),
+        source_home=source,
+        linked_files=linked,
+        skipped_files=tuple(skipped),
+    )
+
+
+def remove_profile(name: str, *, root: str | os.PathLike[str] | None = None) -> RemoveResult:
+    path = profile_path(name, root=root)
+    if not path.exists():
+        return RemoveResult(validate_profile_name(name), path, False)
+    if not path.is_dir():
+        raise ProfileNotFound(f"Profile path is not a directory: {path}")
+    shutil.rmtree(path)
+    return RemoveResult(validate_profile_name(name), path, True)
+
+
+def open_profile(name: str, *, root: str | os.PathLike[str] | None = None) -> Path:
+    path = profile_path(name, root=root)
+    if not path.is_dir():
+        raise ProfileNotFound(f"Profile does not exist: {path}")
+    _open_path(path)
+    return path
+
+
+def build_codex_env(
+    name: str,
+    *,
+    root: str | os.PathLike[str] | None = None,
+    base_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    path = profile_path(name, root=root)
+    if not path.is_dir():
+        raise ProfileNotFound(f"Profile does not exist: {path}")
+    env = dict(os.environ if base_env is None else base_env)
+    env["CODEX_HOME"] = str(path)
+    return env
+
+
+def run_codex(
+    args: Sequence[str],
+    *,
+    profile: str | None = None,
+    root: str | os.PathLike[str] | None = None,
+    executable: str = "codex",
+    base_env: Mapping[str, str] | None = None,
+) -> int:
+    env = dict(os.environ if base_env is None else base_env)
+    if profile is not None:
+        env = build_codex_env(profile, root=root, base_env=env)
+    executable_path = shutil.which(executable, path=env.get("PATH")) or executable
+    try:
+        completed = subprocess.run([executable_path, *args], env=env, check=False)
+    except (FileNotFoundError, PermissionError) as exc:
+        raise CodexExecutableNotFound(f"Codex executable not found: {executable}") from exc
+    return completed.returncode
+
+
+def _should_skip(rel_file: Path, *, include_auth: bool, include_config: bool) -> bool:
+    if rel_file == Path("auth.json") and not include_auth:
+        return True
+    if rel_file == Path("config.toml") and not include_config:
+        return True
+    return False
+
+
+def _open_path(path: Path) -> None:
+    if os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    opener = "open" if sys_platform() == "darwin" else "xdg-open"
+    subprocess.Popen([opener, str(path)])
+
+
+def sys_platform() -> str:
+    import sys
+
+    return sys.platform

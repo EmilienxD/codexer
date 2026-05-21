@@ -1,0 +1,21 @@
+[project]
+name = "codexer"
+version = "0.1.0"
+description = "Profile launcher for Codex CLI"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+codexer = "codexer.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
