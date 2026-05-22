@@ -548,3 +548,104 @@ def _process_is_running(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+def test_cleanup_logs_basic(tmp_path: Path) -> None:
+    from codexer.core import _cleanup_logs
+
+    root = tmp_path
+    logs_dir = root / "logs"
+    logs_dir.mkdir(parents=True)
+
+    log1 = logs_dir / "test1.log"
+    log2 = logs_dir / "test2.log"
+    log3 = logs_dir / "test3.log"
+
+    log1.write_text("a" * 10, encoding="utf-8")
+    log2.write_text("b" * 20, encoding="utf-8")
+    log3.write_text("c" * 30, encoding="utf-8")
+
+    import time
+    now = time.time()
+    os.utime(log1, (now - 100, now - 100))
+    os.utime(log2, (now - 50, now - 50))
+    os.utime(log3, (now, now))
+
+    _cleanup_logs(root=root, max_bytes=35)
+
+    assert not log1.exists()
+    assert not log2.exists()
+    assert log3.exists()
+
+
+def test_cleanup_logs_with_open_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from codexer.core import _cleanup_logs
+
+    root = tmp_path
+    logs_dir = root / "logs"
+    logs_dir.mkdir(parents=True)
+
+    log1 = logs_dir / "test1.log"
+    log2 = logs_dir / "test2.log"
+    log3 = logs_dir / "test3.log"
+
+    log1.write_text("a" * 10, encoding="utf-8")
+    log2.write_text("b" * 20, encoding="utf-8")
+    log3.write_text("c" * 30, encoding="utf-8")
+
+    import time
+    now = time.time()
+    os.utime(log1, (now - 100, now - 100))
+    os.utime(log2, (now - 50, now - 50))
+    os.utime(log3, (now, now))
+
+    class FakeOpenFile:
+        def __init__(self, path: str):
+            self.path = path
+
+    class FakeProcess:
+        def __init__(self):
+            self.info = {"open_files": [FakeOpenFile(str(log1.resolve()))]}
+
+    import psutil
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs: [FakeProcess()])
+
+    _cleanup_logs(root=root, max_bytes=35)
+
+    assert log1.exists()
+    assert not log2.exists()
+    assert not log3.exists()
+
+
+def test_cleanup_logs_with_permission_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from codexer.core import _cleanup_logs
+
+    root = tmp_path
+    logs_dir = root / "logs"
+    logs_dir.mkdir(parents=True)
+
+    log1 = logs_dir / "test1.log"
+    log2 = logs_dir / "test2.log"
+
+    log1.write_text("a" * 10, encoding="utf-8")
+    log2.write_text("b" * 20, encoding="utf-8")
+
+    import time
+    now = time.time()
+    os.utime(log1, (now - 100, now - 100))
+    os.utime(log2, (now, now))
+
+    orig_unlink = Path.unlink
+
+    def fake_unlink(self, *args, **kwargs):
+        if self.resolve() == log1.resolve():
+            raise PermissionError("Access denied")
+        return orig_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fake_unlink)
+
+    _cleanup_logs(root=root, max_bytes=15)
+
+    assert log1.exists()
+    assert not log2.exists()
+

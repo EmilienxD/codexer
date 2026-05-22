@@ -582,6 +582,62 @@ def _stop_background_hook(background: _BackgroundHookRun) -> None:
         background.log_handle.close()
 
 
+def _cleanup_logs(root: str | os.PathLike[str] | None = None, max_bytes: int = 50 * 1024 * 1024) -> None:
+    logs_dir = codexer_root(root) / "logs"
+    if not logs_dir.is_dir():
+        return
+
+    log_files = list(logs_dir.glob("*.log"))
+    if not log_files:
+        return
+
+    log_stats = []
+    for f in log_files:
+        try:
+            stat = f.stat()
+            log_stats.append((f, stat.st_size, stat.st_mtime))
+        except OSError:
+            pass
+
+    total_size = sum(size for _, size, _ in log_stats)
+    if total_size <= max_bytes:
+        return
+
+    open_file_paths = set()
+    try:
+        import psutil
+        for proc in psutil.process_iter(["open_files"]):
+            try:
+                files = proc.info.get("open_files")
+                if files:
+                    for f in files:
+                        try:
+                            open_file_paths.add(Path(f.path).resolve())
+                        except (OSError, ValueError):
+                            pass
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception:
+        pass
+
+    log_stats.sort(key=lambda x: x[2])
+
+    for f, file_size, _ in log_stats:
+        if total_size <= max_bytes:
+            break
+        try:
+            resolved_path = f.resolve()
+        except (OSError, ValueError):
+            resolved_path = f
+        if resolved_path in open_file_paths:
+            continue
+        try:
+            f.unlink()
+            total_size -= file_size
+        except (PermissionError, OSError, FileNotFoundError):
+            pass
+
+
 def _background_log_path(
     hook: Hook,
     *,
@@ -596,6 +652,10 @@ def _background_log_path(
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     unique = uuid.uuid4().hex[:12]
     name = _safe_log_name(f"{scope}-{hook.name}-{timestamp}-{unique}")
+    try:
+        _cleanup_logs(root=root)
+    except Exception:
+        pass
     return codexer_root(root) / "logs" / f"{name}.log"
 
 

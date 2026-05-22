@@ -3,7 +3,9 @@ name = "codexer"
 version = "0.1.0"
 description = "Profile launcher for Codex CLI"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "psutil>=7.2.2",
+]
 
 [project.scripts]
 codexer = "codexer.cli:main"
