@@ -13,14 +13,12 @@ from .core import (
     CodexerError,
     HookExists,
     ProfileExists,
-    ProfileNotFound,
     SourceHomeMissing,
     add_profile,
     add_hook,
     list_hooks,
     list_profiles,
     open_profile,
-    profile_path,
     remove_hook,
     remove_profile,
     run_codex,
@@ -31,6 +29,7 @@ ADD_COMMANDS = {"add", "new", "register"}
 REMOVE_COMMANDS = {"rm", "remove", "del", "delete"}
 LIST_COMMANDS = {"list", "ls"}
 HOOK_COMMANDS = {"hook", "hooks"}
+RUN_COMMANDS = {"run"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -45,25 +44,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 def dispatch(args: list[str]) -> int:
     if not args:
         return run_codex([])
+    if args[0] == "--":
+        return run_codex(args[1:])
 
     command = args[0]
     if command in ADD_COMMANDS:
         return _add(args[1:])
     if command == "init":
         return _init(args[1:])
+    if command in RUN_COMMANDS:
+        return _run(args[1:])
     if command in REMOVE_COMMANDS:
         return _rm(args[1:])
     if command in LIST_COMMANDS:
         return _list(args[1:])
     if command in HOOK_COMMANDS:
         return _hook(args[1:])
-    if command.startswith("-"):
-        return run_codex(args)
-
-    path = profile_path(command)
-    if path.is_dir():
-        return run_codex(args[1:], profile=command)
-    raise ProfileNotFound(f"Profile '{command}' does not exist: {path}")
+    return run_codex(args)
 
 
 def _add(args: Sequence[str]) -> int:
@@ -83,6 +80,15 @@ def _init(args: Sequence[str]) -> int:
 
     result = _create_profile(parsed)
     _print_add_result(result, opened=parsed.open)
+    return run_codex(codex_args, profile=parsed.name)
+
+
+def _run(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="codexer run")
+    parser.add_argument("name")
+    parsed, codex_args = parser.parse_known_args(args)
+    if codex_args[:1] == ["--"]:
+        codex_args = codex_args[1:]
     return run_codex(codex_args, profile=parsed.name)
 
 

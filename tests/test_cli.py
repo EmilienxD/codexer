@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from codexer import cli
+from codexer.core import profile_path
 
 
 def make_source_home(path: Path) -> None:
@@ -52,8 +53,8 @@ def test_cli_add_can_symlink_auth_and_config(
     assert cli.main(["add", "demo", "--sym-auth", "--sym-config"]) == 0
     add_out = capsys.readouterr().out
     assert "Skipped:" not in add_out
-    assert (root / "demo" / "auth.json").is_symlink()
-    assert (root / "demo" / "config.toml").is_symlink()
+    assert profile_path("demo", root=root).joinpath("auth.json").is_symlink()
+    assert profile_path("demo", root=root).joinpath("config.toml").is_symlink()
 
 
 def test_cli_command_aliases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -86,7 +87,7 @@ def test_cli_init_creates_profile_and_runs_codex(
 
     assert cli.main(["init", "demo", "--model", "gpt-5.4"]) == 0
 
-    assert (root / "demo").is_dir()
+    assert profile_path("demo", root=root).is_dir()
     assert calls == [(["--model", "gpt-5.4"], "demo")]
     assert "Created profile 'demo'" in capsys.readouterr().out
 
@@ -99,17 +100,30 @@ def test_cli_rm_missing_warns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, c
     assert "Warning: profile 'missing' does not exist" in capsys.readouterr().out
 
 
-def test_cli_profile_dispatch_passes_remaining_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cli_run_profile_dispatch_passes_remaining_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "profiles"
-    (root / "demo").mkdir(parents=True)
+    profile_path("demo", root=root).mkdir(parents=True)
     calls: list[tuple[list[str], str | None]] = []
 
     monkeypatch.setenv("CODEXER_ROOT", str(root))
     monkeypatch.setattr(cli, "run_codex", lambda args, profile=None: calls.append((list(args), profile)) or 7)
 
-    assert cli.main(["demo", "--model", "gpt-5.4"]) == 7
+    assert cli.main(["run", "demo", "--model", "gpt-5.4"]) == 7
 
     assert calls == [(["--model", "gpt-5.4"], "demo")]
+
+
+def test_cli_run_profile_strips_separator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root = tmp_path / "profiles"
+    profile_path("demo", root=root).mkdir(parents=True)
+    calls: list[tuple[list[str], str | None]] = []
+
+    monkeypatch.setenv("CODEXER_ROOT", str(root))
+    monkeypatch.setattr(cli, "run_codex", lambda args, profile=None: calls.append((list(args), profile)) or 0)
+
+    assert cli.main(["run", "demo", "--", "hi"]) == 0
+
+    assert calls == [(["hi"], "demo")]
 
 
 def test_cli_flag_dispatch_aliases_codex(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,12 +136,32 @@ def test_cli_flag_dispatch_aliases_codex(monkeypatch: pytest.MonkeyPatch) -> Non
     assert calls == [(["--help"], None)]
 
 
-def test_cli_unknown_profile_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_bare_args_alias_codex(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[list[str], str | None]] = []
+
+    monkeypatch.setattr(cli, "run_codex", lambda args, profile=None: calls.append((list(args), profile)) or 0)
+
+    assert cli.main(["hi"]) == 0
+
+    assert calls == [(["hi"], None)]
+
+
+def test_cli_separator_allows_reserved_word_codex_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[list[str], str | None]] = []
+
+    monkeypatch.setattr(cli, "run_codex", lambda args, profile=None: calls.append((list(args), profile)) or 0)
+
+    assert cli.main(["--", "add", "hello"]) == 0
+
+    assert calls == [(["add", "hello"], None)]
+
+
+def test_cli_run_missing_profile_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("CODEXER_ROOT", str(tmp_path / "profiles"))
 
-    assert cli.main(["missing"]) == 2
+    assert cli.main(["run", "missing"]) == 2
 
-    assert "Profile 'missing' does not exist" in capsys.readouterr().err
+    assert "Profile does not exist" in capsys.readouterr().err
 
 
 def test_cli_hook_management_aliases(

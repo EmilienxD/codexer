@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from codexer.core import (
+    profile_path,
     CodexerError,
     InvalidProfileName,
     ProfileExists,
@@ -39,7 +40,7 @@ def test_add_profile_copies_auth_and_config_by_default(tmp_path: Path) -> None:
     make_source_home(source)
 
     result = add_profile("work", root=root, source_home=source)
-    profile = root / "work"
+    profile = profile_path("work", root=root)
 
     assert result.linked_files == 2
     assert result.skipped_files == ()
@@ -73,8 +74,8 @@ def test_add_profile_can_symlink_auth(tmp_path: Path) -> None:
 
     assert result.linked_files == 3
     assert result.skipped_files == ()
-    assert (root / "full" / "auth.json").is_symlink()
-    assert not (root / "full" / "config.toml").is_symlink()
+    assert (profile_path("full", root=root) / "auth.json").is_symlink()
+    assert not (profile_path("full", root=root) / "config.toml").is_symlink()
 
 
 def test_add_profile_can_symlink_config(tmp_path: Path) -> None:
@@ -86,8 +87,8 @@ def test_add_profile_can_symlink_config(tmp_path: Path) -> None:
 
     assert result.linked_files == 3
     assert result.skipped_files == ()
-    assert not (root / "minimal" / "auth.json").is_symlink()
-    assert (root / "minimal" / "config.toml").is_symlink()
+    assert not (profile_path("minimal", root=root) / "auth.json").is_symlink()
+    assert (profile_path("minimal", root=root) / "config.toml").is_symlink()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Relative symlink behavior is POSIX-specific.")
@@ -97,7 +98,7 @@ def test_add_profile_creates_relative_symlinks_on_posix(tmp_path: Path) -> None:
     make_source_home(source)
 
     add_profile("work", root=root, source_home=source)
-    link = root / "work" / "nested"
+    link = profile_path("work", root=root) / "nested"
 
     target = link.readlink()
     assert not target.is_absolute()
@@ -137,16 +138,16 @@ def test_build_codex_env_requires_existing_profile(tmp_path: Path) -> None:
     with pytest.raises(ProfileNotFound):
         build_codex_env("missing", root=root, base_env=env)
 
-    (root / "work").mkdir(parents=True)
+    (profile_path("work", root=root)).mkdir(parents=True)
     built = build_codex_env("work", root=root, base_env=env)
 
     assert built["PATH"] == "x"
-    assert built["CODEX_HOME"] == str(root / "work")
+    assert built["CODEX_HOME"] == str(profile_path("work", root=root))
 
 
 def test_run_codex_passes_args_and_profile_env(tmp_path: Path) -> None:
     root = tmp_path / "profiles"
-    profile = root / "work"
+    profile = profile_path("work", root=root)
     output = tmp_path / "out.txt"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -225,7 +226,7 @@ def test_add_list_and_remove_hooks(tmp_path: Path) -> None:
 
 def test_run_codex_runs_hooks_with_profile_env(tmp_path: Path) -> None:
     root = tmp_path / "profiles"
-    profile = root / "work"
+    profile = profile_path("work", root=root)
     profile.mkdir(parents=True)
     hook_output = tmp_path / "hook.txt"
     codex_output = tmp_path / "codex.txt"
@@ -268,7 +269,7 @@ def test_run_codex_runs_hooks_with_profile_env(tmp_path: Path) -> None:
 
 def test_run_codex_allows_hook_env_changes_to_reach_codex(tmp_path: Path) -> None:
     root = tmp_path / "profiles"
-    profile = root / "work"
+    profile = profile_path("work", root=root)
     profile.mkdir(parents=True)
     codex_output = tmp_path / "codex.txt"
 
@@ -303,7 +304,7 @@ def test_open_profile_errors_when_opener_missing(tmp_path: Path, monkeypatch: py
     from codexer.core import open_profile
 
     root = tmp_path / "profiles"
-    (root / "work").mkdir(parents=True)
+    (profile_path("work", root=root)).mkdir(parents=True)
     monkeypatch.setenv("CODEXER_ROOT", str(root))
 
     def fake_popen(args, **kwargs):
