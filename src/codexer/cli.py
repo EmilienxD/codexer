@@ -160,16 +160,23 @@ def _hook(args: Sequence[str]) -> int:
 
 def _hook_add(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(prog="codexer hook add")
-    name, command_parts, profile = _parse_hook_add_args(args, parser)
+    name, command_parts, options = _parse_hook_add_args(args, parser)
     if not command_parts:
         parser.error("command is required")
 
     try:
-        hook = add_hook(name, _command_from_parts(command_parts), profile=profile)
+        hook = add_hook(
+            name,
+            _command_from_parts(command_parts),
+            profile=options["profile"],
+            background=options["background"],
+            log_file=options["log_file"],
+        )
     except HookExists:
         raise
     scope = "all profiles" if hook.profile == "*" else f"profile '{hook.profile}'"
-    print(f"Added hook '{hook.name}' for {scope}: {hook.command}")
+    mode = "background hook" if hook.background else "hook"
+    print(f"Added {mode} '{hook.name}' for {scope}: {hook.command}")
     return 0
 
 
@@ -199,7 +206,13 @@ def _hook_list(args: Sequence[str]) -> int:
         return 0
     for hook in hooks:
         scope = "*" if hook.profile == "*" else hook.profile
-        print(f"{scope}\t{hook.name}\t{hook.command}")
+        details = []
+        if hook.background:
+            details.append("background")
+        if hook.log_file is not None:
+            details.append(f"log-file={hook.log_file}")
+        suffix = "\t" + "\t".join(details) if details else ""
+        print(f"{scope}\t{hook.name}\t{hook.command}{suffix}")
     return 0
 
 
@@ -215,27 +228,52 @@ def _add_parser(prog: str) -> argparse.ArgumentParser:
 def _parse_hook_add_args(
     args: Sequence[str],
     parser: argparse.ArgumentParser,
-) -> tuple[str, list[str], str]:
+) -> tuple[str, list[str], dict[str, object]]:
     remaining = list(args)
-    profile = "*"
+    options: dict[str, object] = {
+        "profile": "*",
+        "background": False,
+        "log_file": None,
+    }
     index = 0
     while index < len(remaining):
         value = remaining[index]
         if value == "--profile":
-            if index + 1 >= len(remaining):
-                parser.error("--profile requires a value")
-            profile = remaining[index + 1]
-            del remaining[index : index + 2]
+            options["profile"] = _consume_option_value(remaining, index, "--profile", parser)
             continue
         if value.startswith("--profile="):
-            profile = value.split("=", 1)[1]
+            options["profile"] = value.split("=", 1)[1]
+            del remaining[index]
+            continue
+        if value == "--background":
+            options["background"] = True
+            del remaining[index]
+            continue
+        if value == "--log-file":
+            options["log_file"] = _consume_option_value(remaining, index, "--log-file", parser)
+            continue
+        if value.startswith("--log-file="):
+            options["log_file"] = value.split("=", 1)[1]
             del remaining[index]
             continue
         index += 1
 
     if not remaining:
         parser.error("name is required")
-    return remaining[0], remaining[1:], profile
+    return remaining[0], remaining[1:], options
+
+
+def _consume_option_value(
+    remaining: list[str],
+    index: int,
+    option: str,
+    parser: argparse.ArgumentParser,
+) -> str:
+    if index + 1 >= len(remaining):
+        parser.error(f"{option} requires a value")
+    value = remaining[index + 1]
+    del remaining[index : index + 2]
+    return value
 
 
 def _command_from_parts(parts: Sequence[str]) -> str:

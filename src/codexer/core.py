@@ -5,7 +5,10 @@ import json
 import shutil
 import shlex
 import subprocess
+import tempfile
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -68,6 +71,8 @@ class Hook:
     name: str
     command: str
     profile: str = "*"
+    background: bool = False
+    log_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,13 @@ class RemoveHookResult:
 class HookRunResult:
     hook: Hook
     returncode: int
+
+
+@dataclass(frozen=True)
+class _BackgroundHookRun:
+    hook: Hook
+    process: subprocess.Popen
+    log_handle: object
 
 
 GLOBAL_HOOK_PROFILE = "*"
@@ -131,9 +143,17 @@ def add_hook(
     command: str,
     *,
     profile: str = GLOBAL_HOOK_PROFILE,
+    background: bool = False,
+    log_file: str | os.PathLike[str] | None = None,
     root: str | os.PathLike[str] | None = None,
 ) -> Hook:
-    hook = Hook(validate_hook_name(name), command.strip(), _validate_hook_profile(profile))
+    hook = Hook(
+        validate_hook_name(name),
+        command.strip(),
+        _validate_hook_profile(profile),
+        background=background,
+        log_file=str(log_file) if log_file is not None else None,
+    )
     if not hook.command:
         raise InvalidProfileName("Hook command must not be empty.")
 
@@ -141,7 +161,7 @@ def add_hook(
     hooks = data.setdefault("profiles", {}).setdefault(hook.profile, [])
     if any(item.get("name") == hook.name for item in hooks):
         raise HookExists(f"Hook '{hook.name}' already exists for profile '{hook.profile}'.")
-    hooks.append({"name": hook.name, "command": hook.command})
+    hooks.append(_hook_to_item(hook))
     _save_hook_data(data, root=root)
     return hook
 
@@ -193,6 +213,11 @@ def run_hooks(
 
     results: list[HookRunResult] = []
     for hook in hooks:
+        if hook.background:
+            background = _start_background_hook(hook, profile=profile, env=dict(env), root=root)
+            _stop_background_hook(background)
+            results.append(HookRunResult(hook, 0))
+            continue
         completed = subprocess.run(hook.command, shell=True, env=dict(env), check=False)
         result = HookRunResult(hook, completed.returncode)
         results.append(result)
@@ -313,15 +338,37 @@ def run_codex(
     else:
         hooks = []
     executable_path = shutil.which(executable, path=env.get("PATH")) or executable
-    if hooks:
-        command = _shell_chain([hook.command for hook in hooks], [executable_path, *args])
-        completed = subprocess.run(command, shell=True, env=env, check=False)
-        return completed.returncode
+    background_runs: list[_BackgroundHookRun] = []
+    foreground_hooks = [hook for hook in hooks if not hook.background]
+    background_hooks = [hook for hook in hooks if hook.background]
     try:
-        completed = subprocess.run([executable_path, *args], env=env, check=False)
-    except (FileNotFoundError, PermissionError) as exc:
-        raise CodexExecutableNotFound(f"Codex executable not found: {executable}") from exc
-    return completed.returncode
+        if foreground_hooks and background_hooks:
+            return _run_shell_plan(
+                foreground_hooks,
+                background_hooks,
+                [executable_path, *args],
+                profile=profile,
+                env=env,
+                root=root,
+            )
+
+        for hook in background_hooks:
+            background_runs.append(_start_background_hook(hook, profile=profile, env=env, root=root))
+
+        if foreground_hooks:
+            command = _shell_chain([hook.command for hook in foreground_hooks], [executable_path, *args])
+            completed = subprocess.run(command, shell=True, env=env, check=False)
+            return completed.returncode
+        try:
+            completed = subprocess.run([executable_path, *args], env=env, check=False)
+        except KeyboardInterrupt:
+            return 130
+        except (FileNotFoundError, PermissionError) as exc:
+            raise CodexExecutableNotFound(f"Codex executable not found: {executable}") from exc
+        return completed.returncode
+    finally:
+        for background in reversed(background_runs):
+            _stop_background_hook(background)
 
 
 def _should_copy(rel_file: Path, *, sym_auth: bool, sym_config: bool) -> bool:
@@ -330,6 +377,230 @@ def _should_copy(rel_file: Path, *, sym_auth: bool, sym_config: bool) -> bool:
     if rel_file == Path("config.toml"):
         return not sym_config
     return False
+
+
+def _start_background_hook(
+    hook: Hook,
+    *,
+    profile: str | None,
+    env: Mapping[str, str],
+    root: str | os.PathLike[str] | None = None,
+) -> _BackgroundHookRun:
+    log_path = _background_log_path(hook, profile=profile, root=root)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = log_path.open("w", encoding="utf-8", errors="replace")
+    kwargs: dict[str, object] = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(
+        hook.command,
+        shell=True,
+        env=dict(env),
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        **kwargs,
+    )
+    return _BackgroundHookRun(hook, process, log_handle)
+
+
+def _run_shell_plan(
+    foreground_hooks: Sequence[Hook],
+    background_hooks: Sequence[Hook],
+    codex_command: Sequence[str],
+    *,
+    profile: str | None,
+    env: Mapping[str, str],
+    root: str | os.PathLike[str] | None = None,
+) -> int:
+    with tempfile.TemporaryDirectory(prefix="codexer-") as temp:
+        temp_path = Path(temp)
+        if os.name == "nt":
+            return _run_windows_shell_plan(
+                temp_path=temp_path,
+                foreground_hooks=foreground_hooks,
+                background_hooks=background_hooks,
+                codex_command=codex_command,
+                profile=profile,
+                env=env,
+                root=root,
+            )
+
+        script = _write_posix_shell_plan(
+            temp_path,
+            foreground_hooks,
+            background_hooks,
+            codex_command,
+            profile=profile,
+            root=root,
+        )
+        completed = subprocess.run([str(script)], env=env, check=False)
+        return completed.returncode
+
+
+def _run_windows_shell_plan(
+    *,
+    temp_path: Path,
+    foreground_hooks: Sequence[Hook],
+    background_hooks: Sequence[Hook],
+    codex_command: Sequence[str],
+    profile: str | None,
+    env: Mapping[str, str],
+    root: str | os.PathLike[str] | None = None,
+) -> int:
+    hook_env = _run_windows_foreground_hooks_for_env(
+        temp_path,
+        foreground_hooks,
+        env=env,
+    )
+    background_runs: list[_BackgroundHookRun] = []
+    try:
+        for hook in background_hooks:
+            background_runs.append(
+                _start_background_hook(hook, profile=profile, env=hook_env, root=root)
+            )
+        try:
+            completed = subprocess.run(list(codex_command), env=hook_env, check=False)
+        except KeyboardInterrupt:
+            return 130
+        except (FileNotFoundError, PermissionError) as exc:
+            raise CodexExecutableNotFound(f"Codex executable not found: {codex_command[0]}") from exc
+        return completed.returncode
+    finally:
+        for background in reversed(background_runs):
+            _stop_background_hook(background)
+
+
+def _run_windows_foreground_hooks_for_env(
+    temp_path: Path,
+    foreground_hooks: Sequence[Hook],
+    *,
+    env: Mapping[str, str],
+) -> dict[str, str]:
+    env_file = temp_path / "environment.txt"
+    script = temp_path / "foreground-hooks.cmd"
+    lines = ["@echo off"]
+    for hook in foreground_hooks:
+        lines.append(hook.command)
+        lines.append("if errorlevel 1 exit /b %ERRORLEVEL%")
+    lines.append(f'set > "{env_file}"')
+    script.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    completed = subprocess.run(
+        [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", str(script)],
+        env=_windows_minimum_env(env),
+        check=False,
+    )
+    if completed.returncode != 0:
+        failed = next((hook for hook in foreground_hooks), foreground_hooks[0])
+        raise HookFailed(f"Hook '{failed.name}' failed with exit code {completed.returncode}.")
+    return _read_windows_env_file(env_file, fallback=env)
+
+
+def _read_windows_env_file(path: Path, *, fallback: Mapping[str, str]) -> dict[str, str]:
+    parsed = dict(fallback)
+    if not path.exists():
+        return parsed
+    text = path.read_text(encoding="mbcs", errors="replace")
+    for line in text.splitlines():
+        if not line or line.startswith("=") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        parsed[name] = value
+    return parsed
+
+
+def _write_posix_shell_plan(
+    temp_path: Path,
+    foreground_hooks: Sequence[Hook],
+    background_hooks: Sequence[Hook],
+    codex_command: Sequence[str],
+    *,
+    profile: str | None,
+    root: str | os.PathLike[str] | None = None,
+) -> Path:
+    lines = [
+        "#!/bin/sh",
+        "pids=''",
+        "cleanup() {",
+        "  status=$?",
+        "  for pid in $pids; do",
+        "    kill -TERM -$pid >/dev/null 2>&1 || kill -TERM $pid >/dev/null 2>&1 || true",
+        "  done",
+        "  wait >/dev/null 2>&1 || true",
+        "  exit $status",
+        "}",
+        "trap cleanup EXIT INT TERM",
+    ]
+    for hook in foreground_hooks:
+        lines.append(f"{hook.command} || exit $?")
+    for hook in background_hooks:
+        log_path = _background_log_path(hook, profile=profile, root=root)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        command = f"( {hook.command} ) >> {shlex.quote(str(log_path))} 2>&1"
+        lines.append(f"sh -c {shlex.quote(command)} &")
+        lines.append('pids="$pids $!"')
+    lines.append(_quote_shell_command(codex_command))
+    script = temp_path / "run.sh"
+    script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    script.chmod(script.stat().st_mode | 0o700)
+    return script
+
+
+def _stop_background_hook(background: _BackgroundHookRun) -> None:
+    process = background.process
+    try:
+        if process.poll() is None:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                import signal
+
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                if os.name != "nt":
+                    import signal
+
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.kill()
+                process.wait(timeout=5)
+    finally:
+        background.log_handle.close()
+
+
+def _background_log_path(
+    hook: Hook,
+    *,
+    profile: str | None,
+    root: str | os.PathLike[str] | None = None,
+) -> Path:
+    if hook.log_file is not None:
+        return Path(os.path.expandvars(hook.log_file)).expanduser()
+    scope = hook.profile
+    if scope == GLOBAL_HOOK_PROFILE:
+        scope = profile or "global"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    unique = uuid.uuid4().hex[:12]
+    name = _safe_log_name(f"{scope}-{hook.name}-{timestamp}-{unique}")
+    return codexer_root(root) / "logs" / f"{name}.log"
+
+
+def _safe_log_name(value: str) -> str:
+    return "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in value)
 
 
 def _validate_hook_profile(profile: str) -> str:
@@ -362,7 +633,23 @@ def _save_hook_data(data: Mapping[str, object], *, root: str | os.PathLike[str] 
 
 
 def _hook_from_item(profile: str, item: Mapping[str, object]) -> Hook:
-    return Hook(str(item.get("name", "")), str(item.get("command", "")), profile)
+    log_file = item.get("log_file")
+    return Hook(
+        str(item.get("name", "")),
+        str(item.get("command", "")),
+        profile,
+        background=bool(item.get("background", False)),
+        log_file=str(log_file) if log_file is not None else None,
+    )
+
+
+def _hook_to_item(hook: Hook) -> dict[str, object]:
+    item: dict[str, object] = {"name": hook.name, "command": hook.command}
+    if hook.background:
+        item["background"] = True
+    if hook.log_file is not None:
+        item["log_file"] = hook.log_file
+    return item
 
 
 def _hooks_for_run(
@@ -396,6 +683,14 @@ def _quote_cmd_arg(value: str) -> str:
     if any(char in shell_special for char in value) and not quoted.startswith('"'):
         quoted = f'"{quoted}"'
     return quoted
+
+
+def _windows_minimum_env(env: Mapping[str, str]) -> dict[str, str]:
+    full_env = dict(env)
+    for name in ("SystemRoot", "WINDIR", "ComSpec"):
+        if name not in full_env and name in os.environ:
+            full_env[name] = os.environ[name]
+    return full_env
 
 
 def _open_path(path: Path) -> None:

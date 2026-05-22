@@ -210,3 +210,35 @@ def test_cli_hook_add_accepts_profile_equals_after_command(
 
     assert cli.main(["hook", "ls", "--profile", "mytime"]) == 0
     assert "mytime\ttest\techo hello" in capsys.readouterr().out
+
+
+def test_cli_hook_add_accepts_background_and_log_options_after_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CODEXER_ROOT", str(tmp_path / "profiles"))
+
+    assert (
+        cli.main(
+            [
+                "hook",
+                "add",
+                "gateway",
+                "uv run main.py",
+                "--profile",
+                "gcp88",
+                "--background",
+                "--log-file",
+                "C:\\logs\\gateway.log",
+            ]
+        )
+        == 0
+    )
+    assert "Added background hook 'gateway'" in capsys.readouterr().out
+
+    assert cli.main(["hook", "ls", "--profile", "gcp88"]) == 0
+    list_out = capsys.readouterr().out
+    assert "gcp88\tgateway\tuv run main.py" in list_out
+    assert "background" in list_out
+    assert "log-file=C:\\logs\\gateway.log" in list_out
