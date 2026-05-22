@@ -24,9 +24,10 @@ def test_cli_add_list_and_rm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ca
     assert cli.main(["add", "demo"]) == 0
     add_out = capsys.readouterr().out
     assert "Created profile 'demo'" in add_out
-    assert "Skipped: auth.json" in add_out
+    assert "Skipped:" not in add_out
     assert "config.toml" not in add_out
-    assert (root / "demo" / "config.toml").is_symlink()
+    assert not (root / "demo" / "auth.json").is_symlink()
+    assert not (root / "demo" / "config.toml").is_symlink()
 
     assert cli.main(["list"]) == 0
     list_out = capsys.readouterr().out
@@ -37,7 +38,7 @@ def test_cli_add_list_and_rm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ca
     assert "Removed profile 'demo'" in rm_out
 
 
-def test_cli_add_can_exclude_config(
+def test_cli_add_can_symlink_auth_and_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -48,10 +49,11 @@ def test_cli_add_can_exclude_config(
     monkeypatch.setenv("CODEX_HOME", str(source))
     monkeypatch.setenv("CODEXER_ROOT", str(root))
 
-    assert cli.main(["add", "demo", "--exclude-config"]) == 0
+    assert cli.main(["add", "demo", "--sym-auth", "--sym-config"]) == 0
     add_out = capsys.readouterr().out
-    assert "Skipped: auth.json, config.toml" in add_out
-    assert not (root / "demo" / "config.toml").exists()
+    assert "Skipped:" not in add_out
+    assert (root / "demo" / "auth.json").is_symlink()
+    assert (root / "demo" / "config.toml").is_symlink()
 
 
 def test_cli_command_aliases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

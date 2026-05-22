@@ -90,8 +90,8 @@ def _create_profile(parsed: argparse.Namespace):
     try:
         result = add_profile(
             parsed.name,
-            include_auth=parsed.include_auth,
-            exclude_config=parsed.exclude_config,
+            sym_auth=parsed.sym_auth,
+            sym_config=parsed.sym_config,
         )
     except ProfileExists:
         raise
@@ -200,8 +200,8 @@ def _hook_list(args: Sequence[str]) -> int:
 def _add_parser(prog: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("name")
-    parser.add_argument("--include-auth", action="store_true")
-    parser.add_argument("--exclude-config", action="store_true")
+    parser.add_argument("--sym-auth", action="store_true")
+    parser.add_argument("--sym-config", action="store_true")
     parser.add_argument("--open", action="store_true")
     return parser
 

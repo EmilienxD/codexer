@@ -88,17 +88,17 @@ Supported commands:
 - `codexer <codex args starting with ->`
   - Alias to `codex`.
   - Forwards all args to `codex`.
-- `codexer add <name> [--include-auth] [--exclude-config] [--open]`
-- `codexer new <name> [--include-auth] [--exclude-config] [--open]`
-- `codexer register <name> [--include-auth] [--exclude-config] [--open]`
+- `codexer add <name> [--sym-auth] [--sym-config] [--open]`
+- `codexer new <name> [--sym-auth] [--sym-config] [--open]`
+- `codexer register <name> [--sym-auth] [--sym-config] [--open]`
   - Creates `~/.codexer/<name>`.
-  - Recursively mirrors the current Codex home directory structure.
-  - Creates symlinks for files.
-  - Skips root-level `auth.json` unless `--include-auth` is passed.
-  - Includes root-level `config.toml` unless `--exclude-config` is passed.
+  - Mirrors the current Codex home root items.
+  - Creates symlinks for root items.
+  - Copies root-level `auth.json` unless `--sym-auth` is passed.
+  - Copies root-level `config.toml` unless `--sym-config` is passed.
   - `--open` opens the created profile directory.
   - Errors if the profile already exists.
-- `codexer init <name> [--include-auth] [--exclude-config] [--open] [codex args...]`
+- `codexer init <name> [--sym-auth] [--sym-config] [--open] [codex args...]`
   - Same as `add`, then immediately runs `codex` with `CODEX_HOME` set to the new profile.
   - Errors if the profile already exists.
   - A leading `--` before Codex args is stripped if present.
@@ -144,7 +144,7 @@ Important functions:
 - `profile_path(name, root=None) -> Path`
 - `validate_profile_name(name) -> str`
 - `list_profiles(root=None) -> list[Profile]`
-- `add_profile(name, include_auth=False, exclude_config=False, root=None, source_home=None) -> AddResult`
+- `add_profile(name, sym_auth=False, sym_config=False, root=None, source_home=None) -> AddResult`
 - `remove_profile(name, root=None) -> RemoveResult`
 - `open_profile(name, root=None) -> Path`
 - `build_codex_env(name, root=None, base_env=None) -> dict[str, str]`
@@ -181,11 +181,10 @@ CLI code should stay thin and call the SDK functions. If adding behavior that au
 ## Implementation Details And Gotchas
 
 - Windows is the primary target.
-- File mirroring uses `os.walk` and `os.symlink` for files only.
-- The profile directory tree is recreated with real directories.
-- Root-level `auth.json` is skipped by default.
-- Root-level `config.toml` is included by default and skipped only when config exclusion is requested.
-- Skipped files are compared as relative `Path` values, e.g. `Path("auth.json")`.
+- File mirroring symlinks root items by default.
+- Root-level `auth.json` and `config.toml` are copied by default.
+- Root-level `auth.json` is symlinked only when `--sym-auth` / `sym_auth=True` is used.
+- Root-level `config.toml` is symlinked only when `--sym-config` / `sym_config=True` is used.
 - Profile names and hook names must not be empty, `.`, `..`, or contain `/` or `\`.
 - `run_codex` uses `shutil.which(executable, path=env.get("PATH"))` before `subprocess.run`.
   - This is important on Windows so `codex.cmd` shims resolve correctly.
@@ -216,7 +215,7 @@ Current expected state: all tests pass.
 The suite covers:
 
 - Profile creation with symlinks.
-- Skipping and including `auth.json`; default inclusion and optional exclusion of `config.toml`.
+- Default copying and optional symlinking of `auth.json` and `config.toml`.
 - Existing-profile errors.
 - Profile list and remove.
 - `CODEX_HOME` environment construction.
@@ -256,8 +255,8 @@ The project has no committed e2e script, but previous verification used this pat
    - `uv run codexer remove demo`
    - `uv run codexer del fresh`
 7. Verify:
-   - `auth.json` was skipped.
-   - `config.toml` was linked unless config exclusion was requested.
+   - `auth.json` was copied unless auth symlinking was requested.
+   - `config.toml` was copied unless config symlinking was requested.
    - Other files exist as symlinks.
    - Fake Codex saw the correct `CODEX_HOME` for each profile.
    - Hooks saw the same `CODEX_HOME` before Codex launched.

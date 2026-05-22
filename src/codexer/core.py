@@ -83,7 +83,6 @@ class HookRunResult:
     returncode: int
 
 
-ROOT_EXCLUDED_FILES = frozenset({Path("auth.json")})
 GLOBAL_HOOK_PROFILE = "*"
 
 
@@ -110,15 +109,15 @@ def validate_profile_name(name: str) -> str:
 
 
 def profile_path(name: str, *, root: str | os.PathLike[str] | None = None) -> Path:
-    return codexer_root(root) / validate_profile_name(name)
+    return codexer_root(root) / "profiles" / validate_profile_name(name)
 
 
 def list_profiles(*, root: str | os.PathLike[str] | None = None) -> list[Profile]:
-    base = codexer_root(root)
-    if not base.exists():
+    profiles_dir = codexer_root(root) / "profiles"
+    if not profiles_dir.exists():
         return []
     return sorted(
-        (Profile(path.name, path) for path in base.iterdir() if path.is_dir()),
+        (Profile(path.name, path) for path in profiles_dir.iterdir() if path.is_dir()),
         key=lambda profile: profile.name.casefold(),
     )
 
@@ -221,8 +220,8 @@ def validate_hook_name(name: str) -> str:
 def add_profile(
     name: str,
     *,
-    include_auth: bool = False,
-    exclude_config: bool = False,
+    sym_auth: bool = False,
+    sym_config: bool = False,
     root: str | os.PathLike[str] | None = None,
     source_home: str | os.PathLike[str] | None = None,
 ) -> AddResult:
@@ -241,16 +240,19 @@ def add_profile(
     linked = 0
     for source_path in source.iterdir():
         rel_path = source_path.relative_to(source)
-        if _should_skip(rel_path, include_auth=include_auth, exclude_config=exclude_config):
-            skipped.append(rel_path)
-            continue
         link_path = target / rel_path
-        os.symlink(
-            _symlink_target(source_path, link_path),
-            link_path,
-            target_is_directory=source_path.is_dir(),
-        )
-        linked += 1
+        if (
+            _should_copy(rel_path, sym_auth=sym_auth, sym_config=sym_config)
+            and source_path.is_file()
+        ):
+            shutil.copy2(source_path, link_path)
+        else:
+            os.symlink(
+                _symlink_target(source_path, link_path),
+                link_path,
+                target_is_directory=source_path.is_dir(),
+            )
+            linked += 1
 
     return AddResult(
         profile=Profile(validate_profile_name(name), target),
@@ -322,11 +324,11 @@ def run_codex(
     return completed.returncode
 
 
-def _should_skip(rel_file: Path, *, include_auth: bool, exclude_config: bool) -> bool:
-    if rel_file == Path("auth.json") and not include_auth:
-        return True
-    if rel_file == Path("config.toml") and exclude_config:
-        return True
+def _should_copy(rel_file: Path, *, sym_auth: bool, sym_config: bool) -> bool:
+    if rel_file == Path("auth.json"):
+        return not sym_auth
+    if rel_file == Path("config.toml"):
+        return not sym_config
     return False
 
 

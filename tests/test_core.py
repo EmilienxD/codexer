@@ -33,7 +33,7 @@ def make_source_home(path: Path) -> None:
     (path / "nested" / "tool.json").write_text("tool", encoding="utf-8")
 
 
-def test_add_profile_symlinks_files_skips_auth_and_includes_config(tmp_path: Path) -> None:
+def test_add_profile_copies_auth_and_config_by_default(tmp_path: Path) -> None:
     source = tmp_path / "source"
     root = tmp_path / "profiles"
     make_source_home(source)
@@ -41,19 +41,25 @@ def test_add_profile_symlinks_files_skips_auth_and_includes_config(tmp_path: Pat
     result = add_profile("work", root=root, source_home=source)
     profile = root / "work"
 
-    assert result.linked_files == 3
-    assert result.skipped_files == (Path("auth.json"),)
+    assert result.linked_files == 2
+    assert result.skipped_files == ()
     assert profile.is_dir()
-    assert not (profile / "auth.json").exists()
-    assert (profile / "config.toml").is_symlink()
+    assert (profile / "auth.json").read_text(encoding="utf-8") == "auth"
+    assert not (profile / "auth.json").is_symlink()
+    assert (profile / "config.toml").read_text(encoding="utf-8") == "config"
+    assert not (profile / "config.toml").is_symlink()
     assert (profile / "instructions.md").is_symlink()
     assert (profile / "nested").is_symlink()
+    (source / "auth.json").write_text("changed-auth", encoding="utf-8")
+    (source / "config.toml").write_text("changed-config", encoding="utf-8")
+    assert (profile / "auth.json").read_text(encoding="utf-8") == "auth"
+    assert (profile / "config.toml").read_text(encoding="utf-8") == "config"
     (source / "nested" / "created-later.json").write_text("later", encoding="utf-8")
     assert (profile / "nested" / "created-later.json").read_text(encoding="utf-8") == "later"
     assert os.path.samefile(profile / "instructions.md", source / "instructions.md")
 
 
-def test_add_profile_can_include_auth(tmp_path: Path) -> None:
+def test_add_profile_can_symlink_auth(tmp_path: Path) -> None:
     source = tmp_path / "source"
     root = tmp_path / "profiles"
     make_source_home(source)
@@ -62,26 +68,26 @@ def test_add_profile_can_include_auth(tmp_path: Path) -> None:
         "full",
         root=root,
         source_home=source,
-        include_auth=True,
+        sym_auth=True,
     )
 
-    assert result.linked_files == 4
+    assert result.linked_files == 3
     assert result.skipped_files == ()
     assert (root / "full" / "auth.json").is_symlink()
-    assert (root / "full" / "config.toml").is_symlink()
+    assert not (root / "full" / "config.toml").is_symlink()
 
 
-def test_add_profile_can_exclude_config(tmp_path: Path) -> None:
+def test_add_profile_can_symlink_config(tmp_path: Path) -> None:
     source = tmp_path / "source"
     root = tmp_path / "profiles"
     make_source_home(source)
 
-    result = add_profile("minimal", root=root, source_home=source, exclude_config=True)
+    result = add_profile("minimal", root=root, source_home=source, sym_config=True)
 
-    assert result.linked_files == 2
-    assert result.skipped_files == (Path("auth.json"), Path("config.toml"))
-    assert not (root / "minimal" / "auth.json").exists()
-    assert not (root / "minimal" / "config.toml").exists()
+    assert result.linked_files == 3
+    assert result.skipped_files == ()
+    assert not (root / "minimal" / "auth.json").is_symlink()
+    assert (root / "minimal" / "config.toml").is_symlink()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Relative symlink behavior is POSIX-specific.")
